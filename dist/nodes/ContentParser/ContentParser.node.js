@@ -14,7 +14,7 @@ class ContentParser {
             icon: 'fa:file-alt',
             group: ['transform'],
             version: 1,
-            description: 'Parse Hugo/Jekyll markdown: splits frontmatter and body content',
+            description: 'Parse Hugo/Jekyll markdown: splits frontmatter and body content, or recombines them',
             defaults: {
                 name: 'Content Parser',
             },
@@ -22,16 +22,39 @@ class ContentParser {
             outputs: ['main'],
             properties: [
                 {
-                    displayName: 'Markdown Field',
-                    name: 'markdownField',
+                    displayName: 'Operation',
+                    name: 'operation',
+                    type: 'options',
+                    noDataExpression: true,
+                    options: [
+                        {
+                            name: 'Parse',
+                            value: 'parse',
+                            description: 'Split a markdown string into frontmatter and body',
+                        },
+                        {
+                            name: 'Stringify',
+                            value: 'stringify',
+                            description: 'Combine a frontmatter object and body into a markdown string',
+                        },
+                    ],
+                    default: 'parse',
+                },
+                // ── Parse inputs ────────────────────────────────────────────────
+                {
+                    displayName: 'Markdown',
+                    name: 'markdownText',
                     type: 'string',
-                    default: 'content',
-                    description: 'Name of the input field containing the markdown string',
+                    default: '',
+                    description: 'The markdown string to parse (drag a field here or use an expression)',
+                    typeOptions: { rows: 4 },
+                    displayOptions: { show: { operation: ['parse'] } },
                 },
                 {
                     displayName: 'Frontmatter Engine',
                     name: 'engine',
                     type: 'options',
+                    noDataExpression: true,
                     options: [
                         { name: 'YAML (default)', value: 'yaml' },
                         { name: 'TOML', value: 'toml' },
@@ -39,38 +62,102 @@ class ContentParser {
                     ],
                     default: 'yaml',
                     description: 'Frontmatter format used in the markdown file',
+                    displayOptions: { show: { operation: ['parse'] } },
                 },
                 {
                     displayName: 'Output Mode',
                     name: 'outputMode',
                     type: 'options',
+                    noDataExpression: true,
                     options: [
                         {
                             name: 'Merge Into Item',
                             value: 'merge',
-                            description: 'Add frontmatter keys and content to the existing item',
+                            description: 'Add parsed fields to the existing item',
                         },
                         {
                             name: 'Replace Item',
                             value: 'replace',
-                            description: 'Output only the parsed result (frontmatter + content)',
+                            description: 'Output only the parsed result',
                         },
                     ],
                     default: 'merge',
+                    displayOptions: { show: { operation: ['parse'] } },
                 },
                 {
-                    displayName: 'Content Output Field',
+                    displayName: 'Body Output Field',
                     name: 'contentField',
                     type: 'string',
                     default: 'body',
                     description: 'Field name to store the parsed body content',
+                    displayOptions: { show: { operation: ['parse'] } },
                 },
                 {
                     displayName: 'Frontmatter Output Field',
                     name: 'frontmatterField',
                     type: 'string',
                     default: 'frontmatter',
-                    description: 'Field name to store the frontmatter object (leave empty to spread keys directly onto the item)',
+                    description: 'Field name to store the frontmatter object. Leave empty to spread keys directly onto the item.',
+                    displayOptions: { show: { operation: ['parse'] } },
+                },
+                // ── Stringify inputs ─────────────────────────────────────────────
+                {
+                    displayName: 'Frontmatter',
+                    name: 'frontmatterData',
+                    type: 'string',
+                    default: '',
+                    description: 'The frontmatter object (drag a field here or use an expression)',
+                    displayOptions: { show: { operation: ['stringify'] } },
+                },
+                {
+                    displayName: 'Body',
+                    name: 'bodyContent',
+                    type: 'string',
+                    default: '',
+                    description: 'The body content (drag a field here or use an expression)',
+                    typeOptions: { rows: 4 },
+                    displayOptions: { show: { operation: ['stringify'] } },
+                },
+                {
+                    displayName: 'Frontmatter Engine',
+                    name: 'stringifyEngine',
+                    type: 'options',
+                    noDataExpression: true,
+                    options: [
+                        { name: 'YAML (default)', value: 'yaml' },
+                        { name: 'TOML', value: 'toml' },
+                    ],
+                    default: 'yaml',
+                    description: 'Frontmatter format to use when writing the output',
+                    displayOptions: { show: { operation: ['stringify'] } },
+                },
+                {
+                    displayName: 'Output Mode',
+                    name: 'stringifyOutputMode',
+                    type: 'options',
+                    noDataExpression: true,
+                    options: [
+                        {
+                            name: 'Merge Into Item',
+                            value: 'merge',
+                            description: 'Add the markdown field to the existing item',
+                        },
+                        {
+                            name: 'Replace Item',
+                            value: 'replace',
+                            description: 'Output only the markdown field',
+                        },
+                    ],
+                    default: 'merge',
+                    displayOptions: { show: { operation: ['stringify'] } },
+                },
+                {
+                    displayName: 'Markdown Output Field',
+                    name: 'markdownOutputField',
+                    type: 'string',
+                    default: 'markdown',
+                    description: 'Field name to store the generated markdown string',
+                    displayOptions: { show: { operation: ['stringify'] } },
                 },
             ],
         };
@@ -79,48 +166,86 @@ class ContentParser {
         const items = this.getInputData();
         const results = [];
         for (let i = 0; i < items.length; i++) {
-            const markdownField = this.getNodeParameter('markdownField', i);
-            const engine = this.getNodeParameter('engine', i);
-            const outputMode = this.getNodeParameter('outputMode', i);
-            const contentField = this.getNodeParameter('contentField', i);
-            const frontmatterField = this.getNodeParameter('frontmatterField', i);
-            const raw = items[i].json[markdownField];
-            if (typeof raw !== 'string') {
-                throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Field "${markdownField}" is not a string or does not exist on item ${i}`, { itemIndex: i });
-            }
-            let parsed;
-            try {
-                parsed = (0, gray_matter_1.default)(raw, { engines: engine === 'toml' ? { toml: tomlEngine } : undefined });
-            }
-            catch (err) {
-                throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Failed to parse frontmatter on item ${i}: ${err.message}`, { itemIndex: i });
-            }
-            const base = outputMode === 'merge' ? { ...items[i].json } : {};
-            let output;
-            if (frontmatterField) {
-                output = {
-                    ...base,
-                    [frontmatterField]: parsed.data,
-                    [contentField]: parsed.content.trim(),
-                };
+            const operation = this.getNodeParameter('operation', i);
+            if (operation === 'parse') {
+                results.push(parseItem.call(this, items[i], i));
             }
             else {
-                // Spread frontmatter keys directly onto the item
-                output = {
-                    ...base,
-                    ...parsed.data,
-                    [contentField]: parsed.content.trim(),
-                };
+                results.push(stringifyItem.call(this, items[i], i));
             }
-            results.push({ json: output, pairedItem: { item: i } });
         }
         return [results];
     }
 }
 exports.ContentParser = ContentParser;
-// Minimal TOML engine using gray-matter's built-in fallback
-// gray-matter doesn't bundle a TOML parser, so we provide a basic one
-// that handles simple key=value pairs (good enough for most static site configs).
+// ── Parse ─────────────────────────────────────────────────────────────────────
+function parseItem(item, i) {
+    const raw = this.getNodeParameter('markdownText', i);
+    const engine = this.getNodeParameter('engine', i);
+    const outputMode = this.getNodeParameter('outputMode', i);
+    const contentField = this.getNodeParameter('contentField', i);
+    const frontmatterField = this.getNodeParameter('frontmatterField', i);
+    if (typeof raw !== 'string' || raw.trim() === '') {
+        throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Markdown input is empty or not a string on item ${i}`, { itemIndex: i });
+    }
+    let parsed;
+    try {
+        parsed = (0, gray_matter_1.default)(raw, { engines: engine === 'toml' ? { toml: tomlEngine } : undefined });
+    }
+    catch (err) {
+        throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Failed to parse frontmatter on item ${i}: ${err.message}`, { itemIndex: i });
+    }
+    const base = outputMode === 'merge' ? { ...item.json } : {};
+    const output = frontmatterField
+        ? {
+            ...base,
+            [frontmatterField]: parsed.data,
+            [contentField]: parsed.content.trim(),
+        }
+        : {
+            ...base,
+            ...parsed.data,
+            [contentField]: parsed.content.trim(),
+        };
+    return { json: output, pairedItem: { item: i } };
+}
+// ── Stringify ─────────────────────────────────────────────────────────────────
+function stringifyItem(item, i) {
+    const frontmatterRaw = this.getNodeParameter('frontmatterData', i);
+    const body = this.getNodeParameter('bodyContent', i);
+    const engine = this.getNodeParameter('stringifyEngine', i);
+    const outputMode = this.getNodeParameter('stringifyOutputMode', i);
+    const markdownOutputField = this.getNodeParameter('markdownOutputField', i);
+    // frontmatterRaw may arrive as an object (expression) or a JSON string
+    let frontmatterData;
+    if (typeof frontmatterRaw === 'string') {
+        try {
+            frontmatterData = JSON.parse(frontmatterRaw);
+        }
+        catch {
+            throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Frontmatter on item ${i} is not valid JSON`, { itemIndex: i });
+        }
+    }
+    else if (frontmatterRaw && typeof frontmatterRaw === 'object') {
+        frontmatterData = frontmatterRaw;
+    }
+    else {
+        frontmatterData = {};
+    }
+    let markdown;
+    try {
+        markdown = gray_matter_1.default.stringify(body !== null && body !== void 0 ? body : '', frontmatterData, {
+            engines: engine === 'toml' ? { toml: tomlEngine } : undefined,
+        });
+    }
+    catch (err) {
+        throw new n8n_workflow_1.NodeOperationError(this.getNode(), `Failed to stringify on item ${i}: ${err.message}`, { itemIndex: i });
+    }
+    const base = outputMode === 'merge' ? { ...item.json } : {};
+    const output = { ...base, [markdownOutputField]: markdown };
+    return { json: output, pairedItem: { item: i } };
+}
+// ── Minimal TOML engine ───────────────────────────────────────────────────────
 const tomlEngine = {
     parse(input) {
         const result = {};
@@ -133,16 +258,18 @@ const tomlEngine = {
                 continue;
             const key = trimmed.slice(0, eq).trim();
             let val = trimmed.slice(eq + 1).trim();
-            // Strip quotes
-            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+            if ((val.startsWith('"') && val.endsWith('"')) ||
+                (val.startsWith("'") && val.endsWith("'"))) {
                 val = val.slice(1, -1);
             }
             result[key] = val;
         }
         return result;
     },
-    stringify(_obj) {
-        throw new Error('TOML stringify not supported');
+    stringify(obj) {
+        return Object.entries(obj)
+            .map(([k, v]) => `${k} = "${String(v)}"`)
+            .join('\n');
     },
 };
 //# sourceMappingURL=ContentParser.node.js.map
